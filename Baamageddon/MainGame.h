@@ -76,11 +76,12 @@ enum WolfState
 struct CradleGroup
 {
 	std::vector<int> blockIds; // Object IDs sorted left→right by x position
-	int   activeEnd  = 0;      // 0 = left block swinging, 1 = right block swinging
-	float angle      = 0.f;    // Current pendulum angle from vertical (radians)
-	float angVel     = 0.f;    // Angular velocity (rad/frame)
-	float amplitude  = 0.f;    // Initial amplitude (set at group creation)
-	float chainLen   = 0.f;    // Pivot-to-block-centre distance in pixels
+	int   activeEnd    = 0;    // 0 = left block swinging, 1 = right block swinging
+	float angle        = 0.f; // Current pendulum angle from vertical (radians)
+	float angVel       = 0.f; // Angular velocity (rad/frame)
+	float amplitude    = 0.f; // Initial amplitude (set at group creation)
+	float chainLen     = 0.f; // Pivot-to-block-centre distance in pixels
+	float contactAngle = 0.f; // Angle at which outer block touches adjacent block
 };
 
 //-------------------------------------------------------------------------

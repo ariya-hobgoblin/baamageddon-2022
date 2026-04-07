@@ -1079,9 +1079,18 @@ void InitCradleGroups()
 	{
 		group.chainLen  = SPIKES_CHAIN_LEN;
 		group.amplitude = CRADLE_DEFAULT_AMPLITUDE;
-		group.activeEnd = 0;                       // left block swings first
-		group.angle     = -CRADLE_DEFAULT_AMPLITUDE; // left block displaced to the LEFT
+		group.activeEnd = 0;                         // left block swings first
 		group.angVel    = 0.f;
+
+		// Contact angle: the angle at which the outer block's rope tip reaches the
+		// adjacent block's pivot x-position. Transfer must fire here, not at angle=0,
+		// otherwise the block visually passes through the adjacent block.
+		float spacing = Play::GetGameObject( group.blockIds[1] ).pos.x
+		              - Play::GetGameObject( group.blockIds[0] ).pos.x;
+		group.contactAngle = asinf( spacing / SPIKES_ROPE_LENGTH );
+
+		// Left block starts fully displaced to the left (outward)
+		group.angle = -( CRADLE_DEFAULT_AMPLITUDE + group.contactAngle );
 
 		// Add walkable platforms for the stationary MIDDLE blocks (skip first and last).
 		// With the rope (360px) hanging from obj.pos, the block top is at obj.pos.y + ROPE_LENGTH.
@@ -1113,22 +1122,24 @@ void UpdateNewtonsCradle()
 		group.angVel += -PENDULUM_K_CRADLE * sinf( group.angle );
 		group.angle  += group.angVel;
 
-		// Energy transfer:
-		//   Left active (0): block swings from -amplitude → 0 (angVel grows positive).
-		//   When it crosses 0 going right, hand speed to the right block.
-		if( group.activeEnd == 0 && group.angle >= 0.f && group.angVel > 0.f )
+		// Energy transfer at the contact angle (not at vertical/0).
+		// The outer block travels from -(amplitude+contactAngle) to +contactAngle before
+		// it physically reaches the adjacent block; transferring at 0 caused pass-through.
+		//
+		//   Left active (0): fires when angle >= +contactAngle (block just touched adjacent)
+		//   After transfer: right block starts at -contactAngle (symmetric touch position)
+		//   and inherits the angular velocity — so it swings outward immediately.
+		if( group.activeEnd == 0 && group.angle >= group.contactAngle && group.angVel > 0.f )
 		{
 			group.activeEnd = 1;
-			group.angle     = 0.f;
-			// angVel stays positive: right block immediately swings right
+			group.angle     = -group.contactAngle; // right block at symmetric contact position
+			// angVel stays positive: right block swings outward (rightward)
 		}
-		//   Right active (1): block swings from 0 → +amplitude → 0 (angVel grows negative).
-		//   When it crosses 0 going left, hand speed back to the left block.
-		else if( group.activeEnd == 1 && group.angle <= 0.f && group.angVel < 0.f )
+		else if( group.activeEnd == 1 && group.angle <= -group.contactAngle && group.angVel < 0.f )
 		{
 			group.activeEnd = 0;
-			group.angle     = 0.f;
-			// angVel stays negative: left block immediately swings left
+			group.angle     = group.contactAngle; // left block at symmetric contact position
+			// angVel stays negative: left block swings outward (leftward)
 		}
 
 		// Position and draw each block
@@ -1138,10 +1149,14 @@ void UpdateNewtonsCradle()
 			bool isLeftEnd  = ( i == 0 );
 			bool isRightEnd = ( i == (int)group.blockIds.size() - 1 );
 
-			// Active end uses group.angle; all others hang at 0 (vertical)
+			// Active end: uses group.angle.
+			// Inactive end: rests at contactAngle (touching adjacent block) so there's
+			// no visual gap or overlap between the rope tip and the middle block.
 			float blockAngle = 0.f;
-			if( isLeftEnd  && group.activeEnd == 0 ) blockAngle = group.angle; // negative = left
-			if( isRightEnd && group.activeEnd == 1 ) blockAngle = group.angle; // positive = right
+			if( isLeftEnd  )
+				blockAngle = ( group.activeEnd == 0 ) ? group.angle :  group.contactAngle;
+			if( isRightEnd )
+				blockAngle = ( group.activeEnd == 1 ) ? group.angle : -group.contactAngle;
 
 			obj.rotation = -blockAngle; // negate for PlayBuffer's clockwise convention
 
