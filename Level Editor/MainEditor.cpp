@@ -100,11 +100,11 @@ void MainGameEntry( PLAY_IGNORE_COMMAND_LINE )
 	Play::CreateManager( DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_SCALE );
 	Play::CentreAllSpriteOrigins();
 
-	// Set pivot-at-top for pendulum sprites (same as in the game)
+	// Swinging blade: single combined sprite, pivots at top-centre
 	Play::SetSpriteOrigin( SWINGING_BLADE_SPRITE_NAME,
 		Play::GetSpriteWidth( SWINGING_BLADE_SPRITE_NAME ) / 2, 0 );
-	Play::SetSpriteOrigin( SWINGING_SPIKES_SPRITE_NAME,
-		Play::GetSpriteWidth( SWINGING_SPIKES_SPRITE_NAME ) / 2, 0 );
+	// Newton's Cradle rope: pivots at top-centre; spike block keeps default centred origin
+	Play::SetSpriteOrigin( "spr_rope", Play::GetSpriteWidth( "spr_rope" ) / 2, 0 );
 
 	Play::LoadBackground( "Data\\Backgrounds\\spr_background.png" );
 	editorState.cameraTarget = HALF_DISPLAY;
@@ -293,7 +293,24 @@ void DrawScene( void )
 	DrawObjectsOfType( TYPE_EXIT );
 	DrawObjectsOfType( TYPE_WOLF );
 	DrawObjectsOfType( TYPE_SWINGING_BLADE );
-	DrawObjectsOfType( TYPE_SWINGING_SPIKES );
+
+	// Newton's Cradle: draw each block with its own rope hanging vertically
+	{
+		constexpr float ropeLen = 360.f;
+		int ropeId = Play::GetSpriteId( "spr_rope" );
+		for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_SPIKES ) )
+		{
+			GameObject& obj = Play::GetGameObject( id );
+			float z = editorState.zoom;
+
+			// Rope hanging vertically from pivot
+			Play::DrawSpriteRotated( ropeId, { obj.pos.x * z, obj.pos.y * z }, 0, 0.0f, z );
+
+			// Block at the bottom of the rope
+			Play::DrawSpriteRotated( obj.spriteId,
+				{ obj.pos.x * z, ( obj.pos.y + ropeLen ) * z }, 0, 0.0f, z );
+		}
+	}
 
 	// Swinging Blade: draw lines showing the arc of the blade tip at ±amplitude.
 	// This tells the designer exactly which area the blade sweeps through.

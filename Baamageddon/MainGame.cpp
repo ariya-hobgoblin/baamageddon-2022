@@ -64,13 +64,16 @@ constexpr float BLADE_CHAIN_LEN    = 392.f;  // full sprite height = chain + bla
 constexpr float BLADE_TIP_FRACTION = 0.86f;  // blade centre as fraction of chain len
 constexpr float BLADE_HIT_RADIUS   = 35.f;   // collision radius at the blade tip
 
-// Swinging spikes sprite geometry (measured from 113×128 sprite)
-constexpr float SPIKES_CHAIN_LEN       = 128.f;
-constexpr float SPIKES_BLOCK_TOP_FRAC  = 0.28f; // fraction of chain len to block top
-constexpr float SPIKES_BLOCK_HALF_W    = 40.f;  // platform half-width (narrower than sprite)
-constexpr float SPIKES_PLATFORM_HALF_H = 6.f;
-constexpr float SPIKES_HIT_RADIUS      = 38.f;  // collision radius of whole block
-constexpr float SPIKES_TOP_SAFE_HALF_H = 12.f;  // top-safe zone half-height for platform check
+// Swinging spikes: spr_rope (16×360) + spr_swinging_spikes block (113×128).
+// The rope sprite origin is set to top-centre so it pivots at the attachment point.
+// The block sprite keeps its centred origin and is drawn at the rope's lower end.
+constexpr float SPIKES_ROPE_LENGTH     = 360.f;                              // rope sprite height
+constexpr float SPIKES_BLOCK_HALF_H    = 64.f;                               // half of 128px block
+constexpr float SPIKES_CHAIN_LEN       = SPIKES_ROPE_LENGTH + SPIKES_BLOCK_HALF_H; // pivot→block centre
+constexpr float SPIKES_BLOCK_HALF_W    = 40.f;  // platform half-width (slightly narrower than sprite)
+constexpr float SPIKES_PLATFORM_HALF_H = 8.f;
+constexpr float SPIKES_HIT_RADIUS      = 50.f;  // collision radius of block body
+constexpr float SPIKES_TOP_SAFE_HALF_H = 70.f;  // safe zone above block centre (≈ block half-height + margin)
 
 // Maximum horizontal distance between two spike blocks to be in the same cradle
 constexpr float CRADLE_GROUP_THRESHOLD = 150.f;
@@ -94,12 +97,15 @@ void MainGameEntry( PLAY_IGNORE_COMMAND_LINE )
 	Play::CreateManager( DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_SCALE );
 	Play::CentreAllSpriteOrigins();
 
-	// Override origins for pendulum sprites so DrawObjectRotated pivots at the
-	// top (attachment point) rather than the sprite centre.
+	// The swinging blade is a single sprite (chain+blade): pivot at its top-centre.
 	Play::SetSpriteOrigin( SWINGING_BLADE_SPRITE_NAME,
 		Play::GetSpriteWidth( SWINGING_BLADE_SPRITE_NAME ) / 2, 0 );
-	Play::SetSpriteOrigin( SWINGING_SPIKES_SPRITE_NAME,
-		Play::GetSpriteWidth( SWINGING_SPIKES_SPRITE_NAME ) / 2, 0 );
+
+	// The Newton's Cradle uses a separate rope sprite that pivots at its top-centre.
+	// The spike block sprite keeps its default centred origin and is drawn at the
+	// rope's lower end — so NO origin change is needed for spr_swinging_spikes.
+	Play::SetSpriteOrigin( "spr_rope",
+		Play::GetSpriteWidth( "spr_rope" ) / 2, 0 );
 
 	Play::LoadBackground( "Data\\Backgrounds\\spr_background.png" );
 	Play::StartAudioLoop( "soundscape" );
@@ -246,11 +252,27 @@ void DrawScene()
 		Play::DrawObjectRotated( obj );
 	}
 
-	// Draw Newton's Cradle spike blocks (both swinging and static)
-	for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_SPIKES ) )
+	// Newton's Cradle: each block hangs from its own rope.
+	// obj.pos is the pivot; obj.rotation is the current pendulum angle (set by UpdateNewtonsCradle).
+	// The rope origin is at its top-centre so DrawSpriteRotated pivots at the attachment point.
+	// The spike block is drawn unrotated at the rope's lower end (blocks stay upright like a real cradle).
 	{
-		GameObject& obj = Play::GetGameObject( id );
-		Play::DrawObjectRotated( obj );
+		int ropeId = Play::GetSpriteId( "spr_rope" );
+		for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_SPIKES ) )
+		{
+			GameObject& obj = Play::GetGameObject( id );
+			float a = obj.rotation;
+
+			// Rope hanging from pivot
+			Play::DrawSpriteRotated( ropeId, obj.pos, 0, a, 1.0f );
+
+			// Block at the end of the rope, kept upright
+			Point2f blockPos = {
+				obj.pos.x + sinf( a ) * SPIKES_ROPE_LENGTH,
+				obj.pos.y + cosf( a ) * SPIKES_ROPE_LENGTH
+			};
+			Play::DrawSprite( obj.spriteId, blockPos, 0 );
+		}
 	}
 
 	// Draw exit only when all doughnuts have been collected
@@ -1059,15 +1081,13 @@ void InitCradleGroups()
 		group.angle     = -CRADLE_DEFAULT_AMPLITUDE; // left block displaced to the LEFT
 		group.angVel    = 0.f;
 
-		// Add walkable platforms for the stationary MIDDLE blocks (skip first and last)
+		// Add walkable platforms for the stationary MIDDLE blocks (skip first and last).
+		// With the rope (360px) hanging from obj.pos, the block top is at obj.pos.y + ROPE_LENGTH.
 		for( int i = 1; i < (int)group.blockIds.size() - 1; ++i )
 		{
 			GameObject& obj = Play::GetGameObject( group.blockIds[i] );
 
-			// Block body top: origin is at top of sprite so block-body starts at
-			// obj.pos.y + chainLen * SPIKES_BLOCK_TOP_FRAC when hanging vertically.
-			float platformCentreY =
-				obj.pos.y + group.chainLen * SPIKES_BLOCK_TOP_FRAC + SPIKES_PLATFORM_HALF_H;
+			float platformCentreY = obj.pos.y + SPIKES_ROPE_LENGTH + SPIKES_PLATFORM_HALF_H;
 
 			Platform p;
 			p.platform_id  = group.blockIds[i];
