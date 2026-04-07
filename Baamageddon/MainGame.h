@@ -50,6 +50,8 @@ enum GameObjectType
 	TYPE_BOUNCY_BUSH,
 	TYPE_EXIT,
 	TYPE_WOLF,
+	TYPE_SWINGING_BLADE,
+	TYPE_SWINGING_SPIKES,
 };
 
 //-------------------------------------------------------------------------
@@ -69,6 +71,19 @@ enum WolfState
 };
 
 //-------------------------------------------------------------------------
+// Newton's Cradle: a sorted group of swinging spike blocks sharing a pivot
+// height. End blocks swing alternately; middle blocks are static platforms.
+struct CradleGroup
+{
+	std::vector<int> blockIds; // Object IDs sorted left→right by x position
+	int   activeEnd  = 0;      // 0 = left block swinging, 1 = right block swinging
+	float angle      = 0.f;    // Current pendulum angle from vertical (radians)
+	float angVel     = 0.f;    // Angular velocity (rad/frame)
+	float amplitude  = 0.f;    // Initial amplitude (set at group creation)
+	float chainLen   = 0.f;    // Pivot-to-block-centre distance in pixels
+};
+
+//-------------------------------------------------------------------------
 
 struct GameState
 {
@@ -79,7 +94,10 @@ struct GameState
 	std::vector< Platform > vPlatforms;
 	Point2f cameraTarget{ 0.0f, 0.0f };
 	std::map< int, WolfState > wolfStates;	// Keyed by wolf game object ID
-	std::map< int, float > wolfTimers;		// Warning timer per wolf ID
+	std::map< int, float >    wolfTimers;	// Warning timer per wolf ID
+	std::map< int, float >    bladeAngles;	// Current pendulum angle per swinging blade ID
+	std::map< int, float >    bladeAngVels;	// Angular velocity per swinging blade ID
+	std::vector< CradleGroup > vCradleGroups; // Newton's Cradle groups
 };
 
 
@@ -100,6 +118,12 @@ void UpdateGamePlayState();
 void UpdateSpikes();
 
 void UpdateSpinningBlades();
+
+void UpdateSwingingBlades();
+
+void InitCradleGroups();
+
+void UpdateNewtonsCradle();
 
 void UpdateBouncyBushes();
 

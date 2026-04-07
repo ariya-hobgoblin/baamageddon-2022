@@ -33,8 +33,10 @@ constexpr const char* SPINNING_BLADE_SPRITE_NAME = "spr_spinning_blade";
 constexpr const char* MARKER_SPRITE_NAME = "spr_invisible_marker";
 constexpr const char* BOUNCY_BUSH_SPRITE_NAME = "spr_bouncy_bush_4";
 constexpr const char* EXIT_SPRITE_NAME = "level_exit";
-constexpr const char* WOLF_LEFT_SPRITE_NAME = "spr_wolf_left_3";
-constexpr const char* WOLF_RIGHT_SPRITE_NAME = "spr_wolf_right_3";
+constexpr const char* WOLF_LEFT_SPRITE_NAME      = "spr_wolf_left_3";
+constexpr const char* WOLF_RIGHT_SPRITE_NAME     = "spr_wolf_right_3";
+constexpr const char* SWINGING_BLADE_SPRITE_NAME = "spr_swinging_blade";
+constexpr const char* SWINGING_SPIKES_SPRITE_NAME= "spr_swinging_spikes";
 
 constexpr int FLOOR_BOUND = DISPLAY_HEIGHT * 2;
 
@@ -50,6 +52,8 @@ enum GameObjectType
 	TYPE_BOUNCY_BUSH,
 	TYPE_EXIT,
 	TYPE_WOLF,
+	TYPE_SWINGING_BLADE,
+	TYPE_SWINGING_SPIKES,
 	TOTAL_TYPES
 };
 
@@ -63,7 +67,9 @@ const char* SPRITE_NAMES[TOTAL_TYPES][4] =
 	{ MARKER_SPRITE_NAME,        MARKER_SPRITE_NAME,        MARKER_SPRITE_NAME,        MARKER_SPRITE_NAME        },
 	{ BOUNCY_BUSH_SPRITE_NAME,   BOUNCY_BUSH_SPRITE_NAME,   BOUNCY_BUSH_SPRITE_NAME,   BOUNCY_BUSH_SPRITE_NAME   },
 	{ EXIT_SPRITE_NAME,          EXIT_SPRITE_NAME,          EXIT_SPRITE_NAME,          EXIT_SPRITE_NAME          },
-	{ WOLF_LEFT_SPRITE_NAME,     WOLF_RIGHT_SPRITE_NAME,    WOLF_LEFT_SPRITE_NAME,     WOLF_RIGHT_SPRITE_NAME    },
+	{ WOLF_LEFT_SPRITE_NAME,          WOLF_RIGHT_SPRITE_NAME,         WOLF_LEFT_SPRITE_NAME,          WOLF_RIGHT_SPRITE_NAME         },
+	{ SWINGING_BLADE_SPRITE_NAME,    SWINGING_BLADE_SPRITE_NAME,     SWINGING_BLADE_SPRITE_NAME,     SWINGING_BLADE_SPRITE_NAME     },
+	{ SWINGING_SPIKES_SPRITE_NAME,   SWINGING_SPIKES_SPRITE_NAME,    SWINGING_SPIKES_SPRITE_NAME,    SWINGING_SPIKES_SPRITE_NAME    },
 };
 
 struct EditorState
@@ -93,6 +99,13 @@ void MainGameEntry( PLAY_IGNORE_COMMAND_LINE )
 {
 	Play::CreateManager( DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_SCALE );
 	Play::CentreAllSpriteOrigins();
+
+	// Set pivot-at-top for pendulum sprites (same as in the game)
+	Play::SetSpriteOrigin( SWINGING_BLADE_SPRITE_NAME,
+		Play::GetSpriteWidth( SWINGING_BLADE_SPRITE_NAME ) / 2, 0 );
+	Play::SetSpriteOrigin( SWINGING_SPIKES_SPRITE_NAME,
+		Play::GetSpriteWidth( SWINGING_SPIKES_SPRITE_NAME ) / 2, 0 );
+
 	Play::LoadBackground( "Data\\Backgrounds\\spr_background.png" );
 	editorState.cameraTarget = HALF_DISPLAY;
 	Play::ColourSprite( "64px", Play::cBlack );
@@ -170,8 +183,10 @@ void HandleControls( void )
 			case TYPE_MARKER:         editorState.editMode = TYPE_BOUNCY_BUSH;   break;
 			case TYPE_BOUNCY_BUSH:    editorState.editMode = TYPE_EXIT;          break;
 			case TYPE_EXIT:           editorState.editMode = TYPE_WOLF;          break;
-			case TYPE_WOLF:           editorState.editMode = TYPE_SHEEP;         break;
-			default:                  editorState.editMode = TYPE_SHEEP;         break;
+			case TYPE_WOLF:           editorState.editMode = TYPE_SWINGING_BLADE; break;
+			case TYPE_SWINGING_BLADE: editorState.editMode = TYPE_SWINGING_SPIKES;break;
+			case TYPE_SWINGING_SPIKES:editorState.editMode = TYPE_SHEEP;          break;
+			default:                  editorState.editMode = TYPE_SHEEP;          break;
 		}
 		editorState.selectedObj = -1;
 	}
@@ -277,6 +292,50 @@ void DrawScene( void )
 	DrawObjectsOfType( TYPE_BOUNCY_BUSH );
 	DrawObjectsOfType( TYPE_EXIT );
 	DrawObjectsOfType( TYPE_WOLF );
+	DrawObjectsOfType( TYPE_SWINGING_BLADE );
+	DrawObjectsOfType( TYPE_SWINGING_SPIKES );
+
+	// Swinging Blade: draw lines showing the arc of the blade tip at ±amplitude.
+	// This tells the designer exactly which area the blade sweeps through.
+	{
+		constexpr float amplitude    = PLAY_PI / 3.0f;   // 60° — matches game default
+		constexpr float chainLen     = 392.f;
+		constexpr float tipFraction  = 0.86f;
+		const float     tipDist      = chainLen * tipFraction;
+
+		for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_BLADE ) )
+		{
+			GameObject& obj = Play::GetGameObject( id );
+			float px = obj.pos.x * editorState.zoom;
+			float py = obj.pos.y * editorState.zoom;
+
+			// Left extreme, vertical, and right extreme of tip
+			auto tipAt = [&]( float a ) -> Point2f {
+				return { px + sinf(a) * tipDist * editorState.zoom,
+				         py + cosf(a) * tipDist * editorState.zoom };
+			};
+
+			Point2f left    = tipAt( -amplitude );
+			Point2f centre  = tipAt( 0.f );
+			Point2f right   = tipAt(  amplitude );
+
+			Play::DrawLine( { px, py }, left,   Play::cYellow );
+			Play::DrawLine( { px, py }, centre, Play::cYellow );
+			Play::DrawLine( { px, py }, right,  Play::cYellow );
+
+			// Draw a rough arc between left and right using short line segments
+			constexpr int ARC_STEPS = 10;
+			Point2f prev = tipAt( -amplitude );
+			for( int s = 1; s <= ARC_STEPS; ++s )
+			{
+				float a   = -amplitude + ( 2.f * amplitude * s ) / ARC_STEPS;
+				Point2f p = tipAt( a );
+				Play::DrawLine( prev, p, Play::cYellow );
+				prev = p;
+			}
+			Play::DrawDebugText( { px, py - 15.f }, "BLADE ARC", Play::cYellow );
+		}
+	}
 
 	// Show approximate jump height above each bouncy bush as a horizontal line.
 	// The height estimate is based on the maximum bounce (2.5x normal jump impulse)
@@ -324,8 +383,10 @@ void DrawUserInterface( void )
 		case TYPE_MARKER:         sMode = "MARKERS";       break;
 		case TYPE_BOUNCY_BUSH:    sMode = "BOUNCY BUSHES"; break;
 		case TYPE_EXIT:           sMode = "EXIT";          break;
-		case TYPE_WOLF:           sMode = "WOLVES";        break;
-		default:                  sMode = "UNKNOWN";       break;
+		case TYPE_WOLF:           sMode = "WOLVES";         break;
+		case TYPE_SWINGING_BLADE: sMode = "SWING BLADES";  break;
+		case TYPE_SWINGING_SPIKES:sMode = "CRADLE SPIKES"; break;
+		default:                  sMode = "UNKNOWN";        break;
 	}
 
 	Play::DrawRect( { 0, 0 }, { DISPLAY_WIDTH, 50 }, Play::cYellow, true );
@@ -423,7 +484,11 @@ void LoadLevel( void )
 		if( sType == "TYPE_EXIT" )
 			Play::CreateGameObject( TYPE_EXIT,           { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
 		if( sType == "TYPE_WOLF" )
-			Play::CreateGameObject( TYPE_WOLF,           { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
+			Play::CreateGameObject( TYPE_WOLF,            { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
+		if( sType == "TYPE_SWINGING_BLADE" )
+			Play::CreateGameObject( TYPE_SWINGING_BLADE,  { std::stof( sX ), std::stof( sY ) }, 0, sSprite.c_str() );
+		if( sType == "TYPE_SWINGING_SPIKES" )
+			Play::CreateGameObject( TYPE_SWINGING_SPIKES, { std::stof( sX ), std::stof( sY ) }, 0, sSprite.c_str() );
 	}
 
 	levelfile.close();
@@ -451,7 +516,9 @@ void SaveLevel( void )
 			case TYPE_MARKER:         levelfile << "TYPE_MARKER\n";         break;
 			case TYPE_BOUNCY_BUSH:    levelfile << "TYPE_BOUNCY_BUSH\n";    break;
 			case TYPE_EXIT:           levelfile << "TYPE_EXIT\n";           break;
-			case TYPE_WOLF:           levelfile << "TYPE_WOLF\n";           break;
+			case TYPE_WOLF:            levelfile << "TYPE_WOLF\n";            break;
+			case TYPE_SWINGING_BLADE:  levelfile << "TYPE_SWINGING_BLADE\n";  break;
+			case TYPE_SWINGING_SPIKES: levelfile << "TYPE_SWINGING_SPIKES\n"; break;
 			default: break;
 		}
 		levelfile << std::to_string( obj.pos.x ) + "f\n" << std::to_string( obj.pos.y ) + "f\n";

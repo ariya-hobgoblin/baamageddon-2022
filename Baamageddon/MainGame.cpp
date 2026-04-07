@@ -46,10 +46,35 @@ constexpr const char* EXIT_SPRITE_NAME = "level_exit";
 constexpr const char* WOLF_LEFT_SPRITE_NAME = "spr_wolf_left_3";
 constexpr const char* WOLF_RIGHT_SPRITE_NAME = "spr_wolf_right_3";
 
-constexpr float SPINNING_BLADE_SPEED = 3.0f;
-constexpr float WOLF_POUNCE_SPEED = 8.0f;
-constexpr float WOLF_DETECT_RADIUS = 200.0f;
+constexpr const char* SWINGING_BLADE_SPRITE_NAME  = "spr_swinging_blade";
+constexpr const char* SWINGING_SPIKES_SPRITE_NAME = "spr_swinging_spikes";
+
+constexpr float SPINNING_BLADE_SPEED   = 3.0f;
+constexpr float WOLF_POUNCE_SPEED      = 8.0f;
+constexpr float WOLF_DETECT_RADIUS     = 200.0f;
 constexpr float BOUNCY_BUSH_MULTIPLIER = 2.2f;
+
+// Pendulum tuning: effective gravity constant for angle update (rad/frame²).
+// Using g/L notation: g_game=0.5, multiplied by 3 so the swing looks snappy.
+constexpr float PENDULUM_K_BLADE  = 0.004f;  // (1.5 / 392px) * correction
+constexpr float PENDULUM_K_CRADLE = 0.012f;  // (1.5 /  128px) * correction
+
+// Swinging blade sprite geometry (measured from 200×392 sprite)
+constexpr float BLADE_CHAIN_LEN    = 392.f;  // full sprite height = chain + blade
+constexpr float BLADE_TIP_FRACTION = 0.86f;  // blade centre as fraction of chain len
+constexpr float BLADE_HIT_RADIUS   = 35.f;   // collision radius at the blade tip
+
+// Swinging spikes sprite geometry (measured from 113×128 sprite)
+constexpr float SPIKES_CHAIN_LEN       = 128.f;
+constexpr float SPIKES_BLOCK_TOP_FRAC  = 0.28f; // fraction of chain len to block top
+constexpr float SPIKES_BLOCK_HALF_W    = 40.f;  // platform half-width (narrower than sprite)
+constexpr float SPIKES_PLATFORM_HALF_H = 6.f;
+constexpr float SPIKES_HIT_RADIUS      = 38.f;  // collision radius of whole block
+constexpr float SPIKES_TOP_SAFE_HALF_H = 12.f;  // top-safe zone half-height for platform check
+
+// Maximum horizontal distance between two spike blocks to be in the same cradle
+constexpr float CRADLE_GROUP_THRESHOLD = 150.f;
+constexpr float CRADLE_DEFAULT_AMPLITUDE = PLAY_PI / 3.0f; // 60 degrees
 
 constexpr int LEFT_SCREEN_BOUND = 100;
 constexpr int RIGHT_SCREEN_BOUND = DISPLAY_WIDTH - LEFT_SCREEN_BOUND;
@@ -68,11 +93,20 @@ void MainGameEntry( PLAY_IGNORE_COMMAND_LINE )
 {
 	Play::CreateManager( DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_SCALE );
 	Play::CentreAllSpriteOrigins();
+
+	// Override origins for pendulum sprites so DrawObjectRotated pivots at the
+	// top (attachment point) rather than the sprite centre.
+	Play::SetSpriteOrigin( SWINGING_BLADE_SPRITE_NAME,
+		Play::GetSpriteWidth( SWINGING_BLADE_SPRITE_NAME ) / 2, 0 );
+	Play::SetSpriteOrigin( SWINGING_SPIKES_SPRITE_NAME,
+		Play::GetSpriteWidth( SWINGING_SPIKES_SPRITE_NAME ) / 2, 0 );
+
 	Play::LoadBackground( "Data\\Backgrounds\\spr_background.png" );
 	Play::StartAudioLoop( "soundscape" );
 	Play::ColourSprite( "64px", Play::cBlack );
 	LoadLevel();
 	CreatePlatforms();
+	InitCradleGroups();
 	gameState.cameraTarget = Point2f( DISPLAY_WIDTH, DISPLAY_HEIGHT ) - Point2f( DISPLAY_WIDTH / 2.0f, DISPLAY_HEIGHT / 2.0f);
 	Play::SetCameraPosition( gameState.cameraTarget );
 }
@@ -100,6 +134,8 @@ bool MainGameUpdate(float elapsedTime)
 	UpdateBouncyBushes();
 	UpdateExit();
 	UpdateWolves();
+	UpdateSwingingBlades();
+	UpdateNewtonsCradle();
 
 	Play::SetDrawingSpace( Play::SCREEN );
 	Play::DrawSprite( Play::GetSpriteId( SCORE_TAB_SPRITE_NAME ), { DISPLAY_WIDTH / 2, 35 }, 0 );
@@ -196,6 +232,22 @@ void DrawScene()
 
 	// Draw wolves with animation
 	for( int id : Play::CollectGameObjectIDsByType( TYPE_WOLF ) )
+	{
+		GameObject& obj = Play::GetGameObject( id );
+		Play::DrawObjectRotated( obj );
+	}
+
+	// Draw swinging blades: obj.pos is the pivot, obj.rotation is the pendulum angle.
+	// Because the sprite origin was set to top-centre, DrawObjectRotated correctly
+	// rotates the full chain around the pivot point.
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_BLADE ) )
+	{
+		GameObject& obj = Play::GetGameObject( id );
+		Play::DrawObjectRotated( obj );
+	}
+
+	// Draw Newton's Cradle spike blocks (both swinging and static)
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_SPIKES ) )
 	{
 		GameObject& obj = Play::GetGameObject( id );
 		Play::DrawObjectRotated( obj );
@@ -488,10 +540,14 @@ void UpdateGamePlayState()
 
 		gameState.wolfStates.clear();
 		gameState.wolfTimers.clear();
+		gameState.bladeAngles.clear();
+		gameState.bladeAngVels.clear();
+		gameState.vCradleGroups.clear();
 		gameState.vPlatforms.clear();
 
 		LoadLevel();
 		CreatePlatforms(); // Rebuild platform collision data for the reloaded level
+		InitCradleGroups(); // Rebuild Newton's Cradle groups
 
 		for( int id_doughnut : Play::CollectGameObjectIDsByType( TYPE_DOUGHNUT ) )
 		{
@@ -661,6 +717,12 @@ void LoadLevel( void )
 
 		if( sType == "TYPE_WOLF" )
 			Play::CreateGameObject( TYPE_WOLF, { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
+
+		if( sType == "TYPE_SWINGING_BLADE" )
+			Play::CreateGameObject( TYPE_SWINGING_BLADE, { std::stof( sX ), std::stof( sY ) }, 0, sSprite.c_str() );
+
+		if( sType == "TYPE_SWINGING_SPIKES" )
+			Play::CreateGameObject( TYPE_SWINGING_SPIKES, { std::stof( sX ), std::stof( sY ) }, 0, sSprite.c_str() );
 	}
 
 	levelfile.close();
@@ -886,6 +948,197 @@ void UpdateWolves()
 
 			break;
 		}
+		}
+	}
+}
+
+//-------------------------------------------------------------------------
+// Swinging Blade: pendulum around a fixed pivot (obj.pos).
+//
+// The sprite origin was moved to the top-centre in MainGameEntry so that
+// DrawObjectRotated rotates the whole chain around the attachment point.
+// Collision is checked only at the blade tip, NOT along the chain, because
+// the brief says "only the blade should harm the player."
+void UpdateSwingingBlades()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_SWINGING_BLADE ) )
+	{
+		GameObject& obj = Play::GetGameObject( id );
+
+		// Lazy-initialise: start the blade displaced to its default amplitude
+		if( gameState.bladeAngles.find( id ) == gameState.bladeAngles.end() )
+		{
+			gameState.bladeAngles[id]  = CRADLE_DEFAULT_AMPLITUDE; // reuse constant for default
+			gameState.bladeAngVels[id] = 0.f;
+		}
+
+		float& angle  = gameState.bladeAngles[id];
+		float& angVel = gameState.bladeAngVels[id];
+
+		// Pendulum ODE: α = -K * sin(θ)
+		angVel += -PENDULUM_K_BLADE * sinf( angle );
+		angle  += angVel;
+
+		// Update sprite rotation so DrawObjectRotated uses the right angle
+		obj.rotation = angle;
+
+		// Blade tip world position (origin is at the pivot = obj.pos)
+		float tipX = obj.pos.x + sinf( angle ) * BLADE_CHAIN_LEN * BLADE_TIP_FRACTION;
+		float tipY = obj.pos.y + cosf( angle ) * BLADE_CHAIN_LEN * BLADE_TIP_FRACTION;
+
+		// Circle vs circle: blade tip against sheep bounding circle
+		float dx = obj_sheep.pos.x - tipX;
+		float dy = obj_sheep.pos.y - tipY;
+		float sheepRadius = SHEEP_COLLISION_HALFSIZE.x;
+		float combined    = BLADE_HIT_RADIUS + sheepRadius;
+		if( dx*dx + dy*dy < combined * combined )
+			gameState.playState = STATE_DEAD;
+	}
+}
+
+//-------------------------------------------------------------------------
+// Newton's Cradle: group nearby swinging spike blocks into cradle sets,
+// add walkable platform AABBs for the middle (static) blocks.
+//
+// Angle convention (important for understanding the transfer logic):
+//   group.angle is the SIGNED pendulum displacement from vertical:
+//     negative = displaced LEFT,  positive = displaced RIGHT.
+//
+// The left block swings between -amplitude and 0 (left-side only).
+// The right block swings between 0 and +amplitude (right-side only).
+// When the active block passes through 0 heading inward, its angular
+// velocity is transferred to the opposite end — this reliably imitates
+// Newton's Cradle without simulating multi-body collisions.
+//
+// Grouping rule: consecutive blocks within CRADLE_GROUP_THRESHOLD px are
+// considered part of the same cradle (requires ≥2 blocks to form).
+void InitCradleGroups()
+{
+	gameState.vCradleGroups.clear();
+
+	std::vector<int> ids = Play::CollectGameObjectIDsByType( TYPE_SWINGING_SPIKES );
+	if( ids.empty() ) return;
+
+	// Sort left-to-right by x position
+	std::sort( ids.begin(), ids.end(), []( int a, int b ) {
+		return Play::GetGameObject( a ).pos.x < Play::GetGameObject( b ).pos.x;
+	} );
+
+	// Cluster consecutive blocks that are close together
+	CradleGroup current;
+	current.blockIds.push_back( ids[0] );
+
+	for( int i = 1; i < (int)ids.size(); ++i )
+	{
+		float prevX = Play::GetGameObject( ids[i-1] ).pos.x;
+		float currX = Play::GetGameObject( ids[i] ).pos.x;
+		if( currX - prevX <= CRADLE_GROUP_THRESHOLD )
+		{
+			current.blockIds.push_back( ids[i] );
+		}
+		else
+		{
+			if( current.blockIds.size() >= 2 )
+				gameState.vCradleGroups.push_back( current );
+			current = CradleGroup{};
+			current.blockIds.push_back( ids[i] );
+		}
+	}
+	if( current.blockIds.size() >= 2 )
+		gameState.vCradleGroups.push_back( current );
+
+	for( CradleGroup& group : gameState.vCradleGroups )
+	{
+		group.chainLen  = SPIKES_CHAIN_LEN;
+		group.amplitude = CRADLE_DEFAULT_AMPLITUDE;
+		group.activeEnd = 0;                       // left block swings first
+		group.angle     = -CRADLE_DEFAULT_AMPLITUDE; // left block displaced to the LEFT
+		group.angVel    = 0.f;
+
+		// Add walkable platforms for the stationary MIDDLE blocks (skip first and last)
+		for( int i = 1; i < (int)group.blockIds.size() - 1; ++i )
+		{
+			GameObject& obj = Play::GetGameObject( group.blockIds[i] );
+
+			// Block body top: origin is at top of sprite so block-body starts at
+			// obj.pos.y + chainLen * SPIKES_BLOCK_TOP_FRAC when hanging vertically.
+			float platformCentreY =
+				obj.pos.y + group.chainLen * SPIKES_BLOCK_TOP_FRAC + SPIKES_PLATFORM_HALF_H;
+
+			Platform p;
+			p.platform_id  = group.blockIds[i];
+			p.box.pos      = { obj.pos.x, platformCentreY };
+			p.box.halfSize = { SPIKES_BLOCK_HALF_W, SPIKES_PLATFORM_HALF_H };
+			gameState.vPlatforms.push_back( p );
+		}
+	}
+}
+
+//-------------------------------------------------------------------------
+void UpdateNewtonsCradle()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+
+	for( CradleGroup& group : gameState.vCradleGroups )
+	{
+		// Pendulum ODE on the active end's angle
+		group.angVel += -PENDULUM_K_CRADLE * sinf( group.angle );
+		group.angle  += group.angVel;
+
+		// Energy transfer:
+		//   Left active (0): block swings from -amplitude → 0 (angVel grows positive).
+		//   When it crosses 0 going right, hand speed to the right block.
+		if( group.activeEnd == 0 && group.angle >= 0.f && group.angVel > 0.f )
+		{
+			group.activeEnd = 1;
+			group.angle     = 0.f;
+			// angVel stays positive: right block immediately swings right
+		}
+		//   Right active (1): block swings from 0 → +amplitude → 0 (angVel grows negative).
+		//   When it crosses 0 going left, hand speed back to the left block.
+		else if( group.activeEnd == 1 && group.angle <= 0.f && group.angVel < 0.f )
+		{
+			group.activeEnd = 0;
+			group.angle     = 0.f;
+			// angVel stays negative: left block immediately swings left
+		}
+
+		// Position and draw each block
+		for( int i = 0; i < (int)group.blockIds.size(); ++i )
+		{
+			GameObject& obj     = Play::GetGameObject( group.blockIds[i] );
+			bool isLeftEnd  = ( i == 0 );
+			bool isRightEnd = ( i == (int)group.blockIds.size() - 1 );
+
+			// Active end uses group.angle; all others hang at 0 (vertical)
+			float blockAngle = 0.f;
+			if( isLeftEnd  && group.activeEnd == 0 ) blockAngle = group.angle; // negative = left
+			if( isRightEnd && group.activeEnd == 1 ) blockAngle = group.angle; // positive = right
+
+			obj.rotation = blockAngle;
+
+			// Block centre world position (origin is the pivot = obj.pos)
+			float blockCX = obj.pos.x + sinf( blockAngle ) * group.chainLen;
+			float blockCY = obj.pos.y + cosf( blockAngle ) * group.chainLen;
+
+			// Circle collision; player may stand on the top of any block
+			float dx = obj_sheep.pos.x - blockCX;
+			float dy = obj_sheep.pos.y - blockCY;
+			float radSum = SPIKES_HIT_RADIUS + SHEEP_COLLISION_HALFSIZE.x;
+			if( dx*dx + dy*dy < radSum * radSum )
+			{
+				// Safe zone: sheep whose centre is above the block-body top isn't killed —
+				// the platform AABB in vPlatforms has already landed them there.
+				bool sheepAboveTop = ( obj_sheep.pos.y < blockCY - SPIKES_TOP_SAFE_HALF_H );
+				if( !sheepAboveTop )
+					gameState.playState = STATE_DEAD;
+			}
 		}
 	}
 }
