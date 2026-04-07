@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 
 ///////////////////////////////////////////////////////////////////////////
 // Baamageddon - A simple platform game using the PlayBuffer framework.
@@ -42,8 +43,14 @@ enum GameObjectType
 	TYPE_ISLAND,
 	TYPE_CLOUD,
 	TYPE_DOUGHNUT,
-	TYPE_SPRINKLE
-}; 
+	TYPE_SPRINKLE,
+	TYPE_SPIKES,
+	TYPE_SPINNING_BLADE,
+	TYPE_MARKER,
+	TYPE_BOUNCY_BUSH,
+	TYPE_EXIT,
+	TYPE_WOLF,
+};
 
 //-------------------------------------------------------------------------
 
@@ -51,6 +58,14 @@ struct Platform
 {
 	AABB box;
 	int platform_id;
+	float impactOffset = 0.0f;	// Visual-only vertical dip when player lands
+};
+
+enum WolfState
+{
+	WOLF_IDLE = 0,
+	WOLF_WARNING,
+	WOLF_POUNCING,
 };
 
 //-------------------------------------------------------------------------
@@ -63,7 +78,9 @@ struct GameState
 	SheepDirection sheepDirection = DIRECTION_RIGHT;
 	std::vector< Platform > vPlatforms;
 	Point2f cameraTarget{ 0.0f, 0.0f };
-}; 
+	std::map< int, WolfState > wolfStates;	// Keyed by wolf game object ID
+	std::map< int, float > wolfTimers;		// Warning timer per wolf ID
+};
 
 
 //-------------------------------------------------------------------------
@@ -79,6 +96,16 @@ void UpdateSprinkles();
 void UpdateDestroyed();
 
 void UpdateGamePlayState();
+
+void UpdateSpikes();
+
+void UpdateSpinningBlades();
+
+void UpdateBouncyBushes();
+
+void UpdateExit();
+
+void UpdateWolves();
 
 void SetAirborne(GameObject& obj_sheep);
 

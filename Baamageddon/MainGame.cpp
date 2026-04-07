@@ -38,6 +38,18 @@ const Point2f SHEEP_COLLISION_HALFSIZE = { 40,40 };
 constexpr const char* DOUGHNUT_SPRITE_NAME = "spr_doughnut_12";
 constexpr const char* SPRINKLE_SPRITE_NAME = "spr_sprinkle";
 constexpr const char* SCORE_TAB_SPRITE_NAME = "spr_score_tab";
+constexpr const char* SPIKE_SPRITE_NAME = "spr_spikes";
+constexpr const char* SPINNING_BLADE_SPRITE_NAME = "spr_spinning_blade";
+constexpr const char* MARKER_SPRITE_NAME = "spr_invisible_marker";
+constexpr const char* BOUNCY_BUSH_SPRITE_NAME = "spr_bouncy_bush_4";
+constexpr const char* EXIT_SPRITE_NAME = "level_exit";
+constexpr const char* WOLF_LEFT_SPRITE_NAME = "spr_wolf_left_3";
+constexpr const char* WOLF_RIGHT_SPRITE_NAME = "spr_wolf_right_3";
+
+constexpr float SPINNING_BLADE_SPEED = 3.0f;
+constexpr float WOLF_POUNCE_SPEED = 8.0f;
+constexpr float WOLF_DETECT_RADIUS = 200.0f;
+constexpr float BOUNCY_BUSH_MULTIPLIER = 2.2f;
 
 constexpr int LEFT_SCREEN_BOUND = 100;
 constexpr int RIGHT_SCREEN_BOUND = DISPLAY_WIDTH - LEFT_SCREEN_BOUND;
@@ -83,6 +95,11 @@ bool MainGameUpdate(float elapsedTime)
 	Play::ColourTimingBar( Play::cGreen );
 	UpdateDoughnuts();
 	UpdateSprinkles();
+	UpdateSpikes();
+	UpdateSpinningBlades();
+	UpdateBouncyBushes();
+	UpdateExit();
+	UpdateWolves();
 
 	Play::SetDrawingSpace( Play::SCREEN );
 	Play::DrawSprite( Play::GetSpriteId( SCORE_TAB_SPRITE_NAME ), { DISPLAY_WIDTH / 2, 35 }, 0 );
@@ -155,9 +172,44 @@ void DrawScene()
 
 	Play::ColourTimingBar( Play::cYellow );
 
-	DrawObjectsOfType( TYPE_ISLAND );
+	// Draw islands with their impact offset applied as a visual-only vertical dip,
+	// then ease the offset back to zero over time.
+	for( Platform& p : gameState.vPlatforms )
+	{
+		GameObject& obj = Play::GetGameObject( p.platform_id );
+		Play::DrawSprite( obj.spriteId, obj.pos + Point2f( 0, p.impactOffset ), obj.frame );
+		p.impactOffset *= 0.85f; // spring back towards 0
+		if( p.impactOffset < 0.1f ) p.impactOffset = 0.f;
+	}
+
 	DrawObjectsOfType( TYPE_DOUGHNUT );
 	DrawObjectsOfType( TYPE_SPRINKLE );
+	DrawObjectsOfType( TYPE_SPIKES );
+	DrawObjectsOfType( TYPE_BOUNCY_BUSH );
+
+	// Draw spinning blades with rotation
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_SPINNING_BLADE ) )
+	{
+		GameObject& obj = Play::GetGameObject( id );
+		Play::DrawObjectRotated( obj );
+	}
+
+	// Draw wolves with animation
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_WOLF ) )
+	{
+		GameObject& obj = Play::GetGameObject( id );
+		Play::DrawObjectRotated( obj );
+	}
+
+	// Draw exit only when all doughnuts have been collected
+	if( Play::CollectGameObjectIDsByType( TYPE_DOUGHNUT ).empty() )
+	{
+		for( int id : Play::CollectGameObjectIDsByType( TYPE_EXIT ) )
+		{
+			GameObject& obj = Play::GetGameObject( id );
+			Play::DrawSprite( obj.spriteId, obj.pos, obj.frame );
+		}
+	}
 }
 
 //-------------------------------------------------------------------------
@@ -167,7 +219,7 @@ void HandlePlatformCollision(GameObject& obj_sheep)
 
 	int hitCount = 0;
 
-	for (const Platform& rPlatform : gameState.vPlatforms )
+	for (Platform& rPlatform : gameState.vPlatforms )
 	{
 		Vector2f positionOut;
 
@@ -196,6 +248,8 @@ void HandlePlatformCollision(GameObject& obj_sheep)
 				{
 					obj_sheep.pos.y -= 1;
 					gameState.sheepState = STATE_IDLE;
+					// Island impact: dip proportional to landing speed, max 12 pixels
+					rPlatform.impactOffset = std::min( obj_sheep.velocity.y * 0.6f, 12.0f );
 					obj_sheep.velocity.y = 0.f;
 					obj_sheep.acceleration.y = 0.f;
 				}
@@ -204,7 +258,7 @@ void HandlePlatformCollision(GameObject& obj_sheep)
 					obj_sheep.pos.y += 1;
 					obj_sheep.velocity.y = 0.f;
 				}
-				
+
 				++hitCount;
 			}
 		}
@@ -235,9 +289,9 @@ void HandlePlatformCollision(GameObject& obj_sheep)
 //-------------------------------------------------------------------------
 void DrawCollisionBounds(GameObject& obj_sheep)
 {
-	for (const Platform& platform : gameState.vPlatforms)
+	for (const Platform& p : gameState.vPlatforms)
 	{
-		DrawAABB( platform.box, Play::cBlue );
+		DrawAABB( p.box, Play::cBlue );
 	}
 
 	DrawAABB({ obj_sheep.pos, SHEEP_COLLISION_HALFSIZE }, Play::cBlue );
@@ -322,6 +376,22 @@ void UpdateSheep(GameObject& obj_sheep)
 		{
 			obj_sheep.velocity.x = SHEEP_WALK_SPEED;
 			Play::SetSprite(obj_sheep, SHEEP_JUMP_RIGHT_SPRITE_NAME, 1.0f);
+		}
+
+		// Hold to jump higher: reduce gravity while SPACE held and sheep still rising
+		// This gives the player more control over jump height.
+		if( Play::KeyDown( VK_SPACE ) && obj_sheep.velocity.y < 0.f )
+		{
+			obj_sheep.acceleration.y = 0.2f; // reduced gravity while holding jump
+			// Somersault: rotate sprite while rising with held jump
+			obj_sheep.rotSpeed = gameState.sheepDirection ? 0.15f : -0.15f;
+		}
+		else
+		{
+			obj_sheep.acceleration.y = 0.5f; // normal gravity
+			obj_sheep.rotSpeed = 0.f;
+			if( gameState.sheepState == STATE_AIRBORNE && obj_sheep.velocity.y >= 0.f )
+				obj_sheep.rotation = 0.f; // reset rotation once falling
 		}
 	} break;
 	};
@@ -414,7 +484,12 @@ void UpdateGamePlayState()
 		for( int id_obj : Play::CollectAllGameObjectIDs() )
 			Play::DestroyGameObject( id_obj );
 
+		gameState.wolfStates.clear();
+		gameState.wolfTimers.clear();
+		gameState.vPlatforms.clear();
+
 		LoadLevel();
+		CreatePlatforms(); // Rebuild platform collision data for the reloaded level
 
 		for( int id_doughnut : Play::CollectGameObjectIDsByType( TYPE_DOUGHNUT ) )
 		{
@@ -563,11 +638,255 @@ void LoadLevel( void )
 
 		if( sType == "TYPE_DOUGHNUT" )
 			Play::CreateGameObject( TYPE_DOUGHNUT, { std::stof( sX ), std::stof( sY ) }, 30, sSprite.c_str() );
+
+		if( sType == "TYPE_SPIKES" )
+			Play::CreateGameObject( TYPE_SPIKES, { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
+
+		if( sType == "TYPE_SPINNING_BLADE" )
+		{
+			int id = Play::CreateGameObject( TYPE_SPINNING_BLADE, { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
+			Play::GetGameObject( id ).velocity.x = SPINNING_BLADE_SPEED;
+		}
+
+		if( sType == "TYPE_MARKER" )
+			Play::CreateGameObject( TYPE_MARKER, { std::stof( sX ), std::stof( sY ) }, 20, sSprite.c_str() );
+
+		if( sType == "TYPE_BOUNCY_BUSH" )
+			Play::CreateGameObject( TYPE_BOUNCY_BUSH, { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
+
+		if( sType == "TYPE_EXIT" )
+			Play::CreateGameObject( TYPE_EXIT, { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
+
+		if( sType == "TYPE_WOLF" )
+			Play::CreateGameObject( TYPE_WOLF, { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
 	}
 
 	levelfile.close();
 }
 
+
+//-------------------------------------------------------------------------
+// Kills the player if they touch any spike object
+void UpdateSpikes()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_SPIKES ) )
+	{
+		GameObject& obj_spike = Play::GetGameObject( id );
+		if( Play::IsColliding( obj_sheep, obj_spike ) )
+		{
+			gameState.playState = STATE_DEAD;
+			return;
+		}
+	}
+}
+
+//-------------------------------------------------------------------------
+// Spinning blades move horizontally and rotate. They reverse when they hit
+// a marker object or another hazard (spike or spinning blade).
+void UpdateSpinningBlades()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+	std::vector<int> vBlades = Play::CollectGameObjectIDsByType( TYPE_SPINNING_BLADE );
+
+	for( int id_blade : vBlades )
+	{
+		GameObject& obj_blade = Play::GetGameObject( id_blade );
+
+		// Rotate continuously
+		obj_blade.rotSpeed = 0.1f;
+
+		// Check for reversal against markers
+		for( int id_marker : Play::CollectGameObjectIDsByType( TYPE_MARKER ) )
+		{
+			if( Play::IsColliding( obj_blade, Play::GetGameObject( id_marker ) ) )
+			{
+				obj_blade.velocity.x = -obj_blade.velocity.x;
+				break;
+			}
+		}
+
+		// Check for reversal against other spinning blades
+		for( int id_other : vBlades )
+		{
+			if( id_other != id_blade && Play::IsColliding( obj_blade, Play::GetGameObject( id_other ) ) )
+			{
+				obj_blade.velocity.x = -obj_blade.velocity.x;
+				break;
+			}
+		}
+
+		// Check for reversal against spikes
+		for( int id_spike : Play::CollectGameObjectIDsByType( TYPE_SPIKES ) )
+		{
+			if( Play::IsColliding( obj_blade, Play::GetGameObject( id_spike ) ) )
+			{
+				obj_blade.velocity.x = -obj_blade.velocity.x;
+				break;
+			}
+		}
+
+		Play::UpdateGameObject( obj_blade );
+
+		// Kill player on contact
+		if( Play::IsColliding( obj_blade, obj_sheep ) )
+			gameState.playState = STATE_DEAD;
+	}
+}
+
+//-------------------------------------------------------------------------
+// Bouncy bushes launch the player upward. The higher the fall speed, the
+// bigger the bounce, up to a cap.
+void UpdateBouncyBushes()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+	if( gameState.sheepState != STATE_AIRBORNE ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_BOUNCY_BUSH ) )
+	{
+		GameObject& obj_bush = Play::GetGameObject( id );
+		if( Play::IsColliding( obj_sheep, obj_bush ) && obj_sheep.velocity.y > 0.f )
+		{
+			// Bounce with multiplier of incoming fall speed, capped at 2x normal jump
+			float bounceSpeed = obj_sheep.velocity.y * BOUNCY_BUSH_MULTIPLIER;
+			constexpr float MAX_BOUNCE = SHEEP_JUMP_IMPULSE * 2.5f;
+			if( bounceSpeed > MAX_BOUNCE ) bounceSpeed = MAX_BOUNCE;
+			obj_sheep.velocity.y = -bounceSpeed;
+			obj_sheep.acceleration.y = 0.5f;
+			Play::SetSprite( obj_sheep, gameState.sheepDirection ? SHEEP_JUMP_RIGHT_SPRITE_NAME : SHEEP_JUMP_LEFT_SPRITE_NAME, 1.f );
+			RandomBaa();
+			return;
+		}
+	}
+}
+
+//-------------------------------------------------------------------------
+// Shows the exit when all doughnuts are collected and ends the level when
+// the player reaches it. A burst of sprinkles celebrates the completion.
+//
+// NOTE: Play::ColourSprite is NOT called here every frame. It works by
+// iterating over every pixel in the sprite sheet and blending in a new
+// colour, which is a costly O(pixels) CPU operation. Calling it once at
+// startup (or on a deliberate event) is fine; calling it at 60fps would
+// burn unnecessary CPU cycles and could cause hitches. Instead, we re-use
+// the pre-existing sprinkle sprite which already looks colourful.
+void UpdateExit()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+	if( !Play::CollectGameObjectIDsByType( TYPE_DOUGHNUT ).empty() ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_EXIT ) )
+	{
+		if( Play::IsColliding( obj_sheep, Play::GetGameObject( id ) ) )
+		{
+			// Level complete: emit a sprinkle burst then restart
+			for( float rad{ 0.0f }; rad < 2.0f; rad += 0.2f )
+			{
+				int sid = Play::CreateGameObject( TYPE_SPRINKLE, obj_sheep.pos, 0, SPRINKLE_SPRITE_NAME );
+				GameObject& obj_s = Play::GetGameObject( sid );
+				obj_s.rotSpeed = 0.1f;
+				obj_s.acceleration = { 0.0f, 0.5f };
+				Play::SetGameObjectDirection( obj_s, 20, rad * PLAY_PI );
+			}
+			gameState.playState = STATE_START;
+			return;
+		}
+	}
+}
+
+//-------------------------------------------------------------------------
+// Wolves are dormant until the player gets close. They then show a warning
+// frame before pouncing in the direction they face. A pouncing wolf that
+// falls below the death floor is destroyed.
+//
+// Wolf state is stored in gameState.wolfStates (keyed by object ID) rather
+// than in the GameObject itself, since physics fields like velocity are needed
+// for the pounce and cannot double as state storage.
+void UpdateWolves()
+{
+	if( gameState.playState != STATE_PLAY ) return;
+
+	GameObject& obj_sheep = Play::GetGameObjectByType( TYPE_SHEEP );
+
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_WOLF ) )
+	{
+		GameObject& obj_wolf = Play::GetGameObject( id );
+
+		// Initialise state for newly loaded wolves
+		if( gameState.wolfStates.find( id ) == gameState.wolfStates.end() )
+		{
+			gameState.wolfStates[id] = WOLF_IDLE;
+			gameState.wolfTimers[id] = 0.f;
+		}
+
+		WolfState& wolfState = gameState.wolfStates[id];
+
+		switch( wolfState )
+		{
+		case WOLF_IDLE:
+		{
+			// Face the player by choosing the matching directional sprite
+			bool facingLeft = ( obj_sheep.pos.x < obj_wolf.pos.x );
+			Play::SetSprite( obj_wolf, facingLeft ? WOLF_LEFT_SPRITE_NAME : WOLF_RIGHT_SPRITE_NAME, 0.0f );
+			obj_wolf.frame = 0; // frozen on the standing frame
+
+			float dx = obj_sheep.pos.x - obj_wolf.pos.x;
+			float dy = obj_sheep.pos.y - obj_wolf.pos.y;
+			if( ( dx * dx + dy * dy ) < WOLF_DETECT_RADIUS * WOLF_DETECT_RADIUS )
+			{
+				wolfState = WOLF_WARNING;
+				gameState.wolfTimers[id] = 0.f;
+				obj_wolf.frame = 1; // warning frame – gives the player a chance to react
+			}
+			break;
+		}
+		case WOLF_WARNING:
+		{
+			// Hold the warning frame for ~30 ticks, then pounce
+			gameState.wolfTimers[id] += 1.f;
+			if( gameState.wolfTimers[id] > 30.f )
+			{
+				bool facingLeft = ( Play::GetSpriteName( obj_wolf.spriteId ) == std::string( WOLF_LEFT_SPRITE_NAME ) );
+				obj_wolf.velocity.x    = facingLeft ? -WOLF_POUNCE_SPEED : WOLF_POUNCE_SPEED;
+				obj_wolf.velocity.y    = -4.f;          // small upward component to the pounce
+				obj_wolf.acceleration  = { 0.f, 0.5f }; // gravity pulls it down
+				obj_wolf.animSpeed     = 0.5f;
+				obj_wolf.frame         = 2;
+				wolfState = WOLF_POUNCING;
+			}
+			break;
+		}
+		case WOLF_POUNCING:
+		{
+			Play::UpdateGameObject( obj_wolf );
+
+			// Kill player on contact
+			if( Play::IsColliding( obj_wolf, obj_sheep ) )
+			{
+				gameState.playState = STATE_DEAD;
+				return;
+			}
+
+			// Destroy wolf if it falls off the level
+			if( obj_wolf.pos.y > FLOOR_BOUND )
+			{
+				gameState.wolfStates.erase( id );
+				gameState.wolfTimers.erase( id );
+				Play::DestroyGameObject( id );
+			}
+
+			break;
+		}
+		}
+	}
+}
 
 void RandomBaa( void )
 {

@@ -28,6 +28,13 @@ constexpr const char* ISLAND_C_SPRITE_NAME = "spr_island_C";
 constexpr const char* ISLAND_D_SPRITE_NAME = "spr_island_D";
 
 constexpr const char* DOUGHNUT_SPRITE_NAME = "spr_doughnut_12";
+constexpr const char* SPIKE_SPRITE_NAME = "spr_spikes";
+constexpr const char* SPINNING_BLADE_SPRITE_NAME = "spr_spinning_blade";
+constexpr const char* MARKER_SPRITE_NAME = "spr_invisible_marker";
+constexpr const char* BOUNCY_BUSH_SPRITE_NAME = "spr_bouncy_bush_4";
+constexpr const char* EXIT_SPRITE_NAME = "level_exit";
+constexpr const char* WOLF_LEFT_SPRITE_NAME = "spr_wolf_left_3";
+constexpr const char* WOLF_RIGHT_SPRITE_NAME = "spr_wolf_right_3";
 
 constexpr int FLOOR_BOUND = DISPLAY_HEIGHT * 2;
 
@@ -37,14 +44,26 @@ enum GameObjectType
 	TYPE_SHEEP,
 	TYPE_ISLAND,
 	TYPE_DOUGHNUT,
+	TYPE_SPIKES,
+	TYPE_SPINNING_BLADE,
+	TYPE_MARKER,
+	TYPE_BOUNCY_BUSH,
+	TYPE_EXIT,
+	TYPE_WOLF,
 	TOTAL_TYPES
 };
 
 const char* SPRITE_NAMES[TOTAL_TYPES][4] =
 {
-	{ SHEEP_SPRITE_NAME, SHEEP_SPRITE_NAME, SHEEP_SPRITE_NAME, SHEEP_SPRITE_NAME },
-	{ ISLAND_A_SPRITE_NAME, ISLAND_B_SPRITE_NAME, ISLAND_C_SPRITE_NAME, ISLAND_D_SPRITE_NAME },
-	{ DOUGHNUT_SPRITE_NAME, DOUGHNUT_SPRITE_NAME, DOUGHNUT_SPRITE_NAME, DOUGHNUT_SPRITE_NAME },
+	{ SHEEP_SPRITE_NAME,         SHEEP_SPRITE_NAME,         SHEEP_SPRITE_NAME,         SHEEP_SPRITE_NAME         },
+	{ ISLAND_A_SPRITE_NAME,      ISLAND_B_SPRITE_NAME,      ISLAND_C_SPRITE_NAME,      ISLAND_D_SPRITE_NAME      },
+	{ DOUGHNUT_SPRITE_NAME,      DOUGHNUT_SPRITE_NAME,      DOUGHNUT_SPRITE_NAME,      DOUGHNUT_SPRITE_NAME      },
+	{ SPIKE_SPRITE_NAME,         SPIKE_SPRITE_NAME,         SPIKE_SPRITE_NAME,         SPIKE_SPRITE_NAME         },
+	{ SPINNING_BLADE_SPRITE_NAME,SPINNING_BLADE_SPRITE_NAME,SPINNING_BLADE_SPRITE_NAME,SPINNING_BLADE_SPRITE_NAME},
+	{ MARKER_SPRITE_NAME,        MARKER_SPRITE_NAME,        MARKER_SPRITE_NAME,        MARKER_SPRITE_NAME        },
+	{ BOUNCY_BUSH_SPRITE_NAME,   BOUNCY_BUSH_SPRITE_NAME,   BOUNCY_BUSH_SPRITE_NAME,   BOUNCY_BUSH_SPRITE_NAME   },
+	{ EXIT_SPRITE_NAME,          EXIT_SPRITE_NAME,          EXIT_SPRITE_NAME,          EXIT_SPRITE_NAME          },
+	{ WOLF_LEFT_SPRITE_NAME,     WOLF_RIGHT_SPRITE_NAME,    WOLF_LEFT_SPRITE_NAME,     WOLF_RIGHT_SPRITE_NAME    },
 };
 
 struct EditorState
@@ -143,9 +162,16 @@ void HandleControls( void )
 	{
 		switch( editorState.editMode )
 		{
-			case TYPE_SHEEP: editorState.editMode = TYPE_ISLAND; break;
-			case TYPE_ISLAND: editorState.editMode = TYPE_DOUGHNUT; break;
-			case TYPE_DOUGHNUT: editorState.editMode = TYPE_SHEEP; break;
+			case TYPE_SHEEP:          editorState.editMode = TYPE_ISLAND;        break;
+			case TYPE_ISLAND:         editorState.editMode = TYPE_DOUGHNUT;      break;
+			case TYPE_DOUGHNUT:       editorState.editMode = TYPE_SPIKES;        break;
+			case TYPE_SPIKES:         editorState.editMode = TYPE_SPINNING_BLADE;break;
+			case TYPE_SPINNING_BLADE: editorState.editMode = TYPE_MARKER;        break;
+			case TYPE_MARKER:         editorState.editMode = TYPE_BOUNCY_BUSH;   break;
+			case TYPE_BOUNCY_BUSH:    editorState.editMode = TYPE_EXIT;          break;
+			case TYPE_EXIT:           editorState.editMode = TYPE_WOLF;          break;
+			case TYPE_WOLF:           editorState.editMode = TYPE_SHEEP;         break;
+			default:                  editorState.editMode = TYPE_SHEEP;         break;
 		}
 		editorState.selectedObj = -1;
 	}
@@ -175,6 +201,20 @@ void HandleControls( void )
 				{
 					case TYPE_SHEEP:
 						Play::GetGameObjectByType( TYPE_SHEEP ).pos = mouseWorldPos;
+						break;
+					case TYPE_EXIT:
+						// Only one exit allowed in the level (like the player)
+						if( Play::CollectGameObjectIDsByType( TYPE_EXIT ).empty() )
+						{
+							editorState.selectedObj = Play::CreateGameObject( TYPE_EXIT, mouseWorldSnapPos, 40, SPRITE_NAMES[static_cast<int>( TYPE_EXIT )][0] );
+							editorState.selectedOffset = { 0.0f, 0.0f };
+						}
+						else
+						{
+							// Select the existing exit instead
+							editorState.selectedObj = Play::CollectGameObjectIDsByType( TYPE_EXIT )[0];
+							editorState.selectedOffset = Play::GetGameObject( editorState.selectedObj ).pos - mouseWorldSnapPos;
+						}
 						break;
 					default:
 						editorState.selectedObj = Play::CreateGameObject( editorState.editMode, mouseWorldSnapPos, 50, SPRITE_NAMES[static_cast<int>( editorState.editMode )][0] );
@@ -231,6 +271,32 @@ void DrawScene( void )
 	DrawObjectsOfType( TYPE_ISLAND );
 	DrawObjectsOfType( TYPE_DOUGHNUT );
 	DrawObjectsOfType( TYPE_SHEEP );
+	DrawObjectsOfType( TYPE_SPIKES );
+	DrawObjectsOfType( TYPE_SPINNING_BLADE );
+	DrawObjectsOfType( TYPE_MARKER );
+	DrawObjectsOfType( TYPE_BOUNCY_BUSH );
+	DrawObjectsOfType( TYPE_EXIT );
+	DrawObjectsOfType( TYPE_WOLF );
+
+	// Show approximate jump height above each bouncy bush as a horizontal line.
+	// The height estimate is based on the maximum bounce (2.5x normal jump impulse)
+	// using the kinematic formula: h = v^2 / (2 * gravity), where gravity = 0.5 px/frame^2.
+	constexpr float SHEEP_JUMP_IMPULSE = 14.f;
+	constexpr float MAX_BOUNCE_SPEED   = SHEEP_JUMP_IMPULSE * 2.5f;
+	constexpr float GRAVITY            = 0.5f;
+	const float peakHeight = ( MAX_BOUNCE_SPEED * MAX_BOUNCE_SPEED ) / ( 2.f * GRAVITY );
+
+	for( int id : Play::CollectGameObjectIDsByType( TYPE_BOUNCY_BUSH ) )
+	{
+		GameObject& obj = Play::GetGameObject( id );
+		// Draw positions are world-space scaled by zoom (same convention as DrawObjectsOfType).
+		// PlayBuffer applies the camera offset, so no manual subtraction is needed.
+		float drawX     = obj.pos.x * editorState.zoom;
+		float bushDrawY = obj.pos.y * editorState.zoom;
+		float peakDrawY = bushDrawY - peakHeight * editorState.zoom;
+		Play::DrawLine( { drawX - 30, peakDrawY }, { drawX + 30, peakDrawY }, Play::cCyan );
+		Play::DrawDebugText( { drawX, peakDrawY - 10.f }, "MAX BOUNCE HEIGHT", Play::cCyan );
+	}
 
 	if( editorState.selectedObj != -1 )
 	{
@@ -241,7 +307,6 @@ void DrawScene( void )
 		std::string s = "X:" + std::to_string( (int)( obj.pos.x + 0.5f ) ) + " / Y:" + std::to_string( (int)( obj.pos.y + 0.5f ) );
 		Play::DrawDebugText( ( obj.pos - origin + Point2f( size.x / 2.0f, -10.0f / editorState.zoom ) ) * editorState.zoom, s.c_str(), Play::cWhite );
 	}
-
 }
 
 //-------------------------------------------------------------------------
@@ -251,9 +316,16 @@ void DrawUserInterface( void )
 	std::string sMode;
 	switch( editorState.editMode )
 	{
-		case TYPE_SHEEP: sMode = "PLAYER"; break;
-		case TYPE_ISLAND: sMode = "ISLANDS"; break;
-		case TYPE_DOUGHNUT: sMode = "DONUTS"; break;
+		case TYPE_SHEEP:          sMode = "PLAYER";        break;
+		case TYPE_ISLAND:         sMode = "ISLANDS";       break;
+		case TYPE_DOUGHNUT:       sMode = "DONUTS";        break;
+		case TYPE_SPIKES:         sMode = "SPIKES";        break;
+		case TYPE_SPINNING_BLADE: sMode = "SPIN BLADES";   break;
+		case TYPE_MARKER:         sMode = "MARKERS";       break;
+		case TYPE_BOUNCY_BUSH:    sMode = "BOUNCY BUSHES"; break;
+		case TYPE_EXIT:           sMode = "EXIT";          break;
+		case TYPE_WOLF:           sMode = "WOLVES";        break;
+		default:                  sMode = "UNKNOWN";       break;
 	}
 
 	Play::DrawRect( { 0, 0 }, { DISPLAY_WIDTH, 50 }, Play::cYellow, true );
@@ -335,13 +407,23 @@ void LoadLevel( void )
 		std::getline( levelfile, sSprite );
 
 		if( sType == "TYPE_SHEEP" )
-			Play::CreateGameObject( TYPE_SHEEP, { std::stof( sX ), std::stof( sY ) }, 50, sSprite.c_str() );
-
+			Play::CreateGameObject( TYPE_SHEEP,          { std::stof( sX ), std::stof( sY ) }, 50, sSprite.c_str() );
 		if( sType == "TYPE_ISLAND" )
-			Play::CreateGameObject( TYPE_ISLAND, { std::stof( sX ), std::stof( sY ) }, 0, sSprite.c_str() );
-
+			Play::CreateGameObject( TYPE_ISLAND,         { std::stof( sX ), std::stof( sY ) }, 0,  sSprite.c_str() );
 		if( sType == "TYPE_DOUGHNUT" )
-			Play::CreateGameObject( TYPE_DOUGHNUT, { std::stof( sX ), std::stof( sY ) }, 30, sSprite.c_str() );
+			Play::CreateGameObject( TYPE_DOUGHNUT,       { std::stof( sX ), std::stof( sY ) }, 30, sSprite.c_str() );
+		if( sType == "TYPE_SPIKES" )
+			Play::CreateGameObject( TYPE_SPIKES,         { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
+		if( sType == "TYPE_SPINNING_BLADE" )
+			Play::CreateGameObject( TYPE_SPINNING_BLADE, { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
+		if( sType == "TYPE_MARKER" )
+			Play::CreateGameObject( TYPE_MARKER,         { std::stof( sX ), std::stof( sY ) }, 20, sSprite.c_str() );
+		if( sType == "TYPE_BOUNCY_BUSH" )
+			Play::CreateGameObject( TYPE_BOUNCY_BUSH,    { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
+		if( sType == "TYPE_EXIT" )
+			Play::CreateGameObject( TYPE_EXIT,           { std::stof( sX ), std::stof( sY ) }, 40, sSprite.c_str() );
+		if( sType == "TYPE_WOLF" )
+			Play::CreateGameObject( TYPE_WOLF,           { std::stof( sX ), std::stof( sY ) }, 35, sSprite.c_str() );
 	}
 
 	levelfile.close();
@@ -361,16 +443,16 @@ void SaveLevel( void )
 		GameObject& obj = Play::GetGameObject( id );
 		switch( obj.type )
 		{
-			case TYPE_SHEEP:
-				levelfile << "TYPE_SHEEP\n";
-				break;
-			case TYPE_ISLAND:
-				levelfile << "TYPE_ISLAND\n";
-				break;
-			case TYPE_DOUGHNUT:
-				levelfile << "TYPE_DOUGHNUT\n";
-				break;
-
+			case TYPE_SHEEP:          levelfile << "TYPE_SHEEP\n";          break;
+			case TYPE_ISLAND:         levelfile << "TYPE_ISLAND\n";         break;
+			case TYPE_DOUGHNUT:       levelfile << "TYPE_DOUGHNUT\n";       break;
+			case TYPE_SPIKES:         levelfile << "TYPE_SPIKES\n";         break;
+			case TYPE_SPINNING_BLADE: levelfile << "TYPE_SPINNING_BLADE\n"; break;
+			case TYPE_MARKER:         levelfile << "TYPE_MARKER\n";         break;
+			case TYPE_BOUNCY_BUSH:    levelfile << "TYPE_BOUNCY_BUSH\n";    break;
+			case TYPE_EXIT:           levelfile << "TYPE_EXIT\n";           break;
+			case TYPE_WOLF:           levelfile << "TYPE_WOLF\n";           break;
+			default: break;
 		}
 		levelfile << std::to_string( obj.pos.x ) + "f\n" << std::to_string( obj.pos.y ) + "f\n";
 		levelfile << Play::GetSpriteName( obj.spriteId ) << "\n";
