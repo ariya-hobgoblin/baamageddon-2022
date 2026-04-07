@@ -252,6 +252,8 @@ void HandlePlatformCollision(GameObject& obj_sheep)
 					rPlatform.impactOffset = std::min( obj_sheep.velocity.y * 0.6f, 12.0f );
 					obj_sheep.velocity.y = 0.f;
 					obj_sheep.acceleration.y = 0.f;
+					obj_sheep.rotation = 0.f;  // Clear any somersault rotation on landing
+					obj_sheep.rotSpeed = 0.f;
 				}
 				else // Sheep heading up into a platform
 				{
