@@ -263,10 +263,12 @@ void DrawScene()
 			GameObject& obj = Play::GetGameObject( id );
 			float a = obj.rotation;
 
-			// Rope hanging from pivot
-			Play::DrawSpriteRotated( ropeId, obj.pos, 0, a, 1.0f );
+			// PlayBuffer uses clockwise-positive rotation, so a downward-pointing
+			// sprite at +θ tips LEFT. Negate the angle for the draw call so the
+			// rope leans in the same direction as the physics displacement (+θ = right).
+			Play::DrawSpriteRotated( ropeId, obj.pos, 0, -a, 1.0f );
 
-			// Block at the end of the rope, kept upright
+			// Block position uses standard math convention (no negation needed here)
 			Point2f blockPos = {
 				obj.pos.x + sinf( a ) * SPIKES_ROPE_LENGTH,
 				obj.pos.y + cosf( a ) * SPIKES_ROPE_LENGTH
@@ -1005,8 +1007,8 @@ void UpdateSwingingBlades()
 		angVel += -PENDULUM_K_BLADE * sinf( angle );
 		angle  += angVel;
 
-		// Update sprite rotation so DrawObjectRotated uses the right angle
-		obj.rotation = angle;
+		// Negate for PlayBuffer's clockwise convention (see rotation matrix in Play.h)
+		obj.rotation = -angle;
 
 		// Blade tip world position (origin is at the pivot = obj.pos)
 		float tipX = obj.pos.x + sinf( angle ) * BLADE_CHAIN_LEN * BLADE_TIP_FRACTION;
@@ -1141,9 +1143,9 @@ void UpdateNewtonsCradle()
 			if( isLeftEnd  && group.activeEnd == 0 ) blockAngle = group.angle; // negative = left
 			if( isRightEnd && group.activeEnd == 1 ) blockAngle = group.angle; // positive = right
 
-			obj.rotation = blockAngle;
+			obj.rotation = -blockAngle; // negate for PlayBuffer's clockwise convention
 
-			// Block centre world position (origin is the pivot = obj.pos)
+			// Block centre world position (physics uses standard math, no negation)
 			float blockCX = obj.pos.x + sinf( blockAngle ) * group.chainLen;
 			float blockCY = obj.pos.y + cosf( blockAngle ) * group.chainLen;
 
