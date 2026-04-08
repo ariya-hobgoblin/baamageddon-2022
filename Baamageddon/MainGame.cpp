@@ -263,10 +263,9 @@ void DrawScene()
 			GameObject& obj = Play::GetGameObject( id );
 			float a = obj.rotation;
 
-			// PlayBuffer uses clockwise-positive rotation, so a downward-pointing
-			// sprite at +θ tips LEFT. Negate the angle for the draw call so the
-			// rope leans in the same direction as the physics displacement (+θ = right).
-			Play::DrawSpriteRotated( ropeId, obj.pos, 0, -a, 1.0f );
+			// obj.rotation = -blockAngle, so 'a' already carries the correct sign
+			// for PlayBuffer's clockwise convention (positive angle tips LEFT on screen).
+			Play::DrawSpriteRotated( ropeId, obj.pos, 0, a, 1.0f );
 
 			// Block position: a = obj.rotation = -blockAngle, so we need sinf(-a)
 			// to recover the correct physics angle for the world-space offset.
