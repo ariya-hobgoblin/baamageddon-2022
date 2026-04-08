@@ -268,10 +268,11 @@ void DrawScene()
 			// rope leans in the same direction as the physics displacement (+θ = right).
 			Play::DrawSpriteRotated( ropeId, obj.pos, 0, -a, 1.0f );
 
-			// Block position uses standard math convention (no negation needed here)
+			// Block position: a = obj.rotation = -blockAngle, so we need sinf(-a)
+			// to recover the correct physics angle for the world-space offset.
 			Point2f blockPos = {
-				obj.pos.x + sinf( a ) * SPIKES_ROPE_LENGTH,
-				obj.pos.y + cosf( a ) * SPIKES_ROPE_LENGTH
+				obj.pos.x + sinf( -a ) * SPIKES_ROPE_LENGTH,
+				obj.pos.y + cosf( -a ) * SPIKES_ROPE_LENGTH
 			};
 			Play::DrawSprite( obj.spriteId, blockPos, 0 );
 		}
@@ -1089,8 +1090,8 @@ void InitCradleGroups()
 		              - Play::GetGameObject( group.blockIds[0] ).pos.x;
 		group.contactAngle = asinf( spacing / SPIKES_ROPE_LENGTH );
 
-		// Left block starts fully displaced to the left (outward)
-		group.angle = -( CRADLE_DEFAULT_AMPLITUDE + group.contactAngle );
+		// Left block starts displaced to the left by the default amplitude
+		group.angle = -CRADLE_DEFAULT_AMPLITUDE;
 
 		// Add walkable platforms for the stationary MIDDLE blocks (skip first and last).
 		// With the rope (360px) hanging from obj.pos, the block top is at obj.pos.y + ROPE_LENGTH.
@@ -1118,8 +1119,10 @@ void UpdateNewtonsCradle()
 
 	for( CradleGroup& group : gameState.vCradleGroups )
 	{
-		// Pendulum ODE on the active end's angle
+		// Pendulum ODE on the active end's angle.
+		// Tiny damping (0.999) prevents Euler drift from accumulating energy over time.
 		group.angVel += -PENDULUM_K_CRADLE * sinf( group.angle );
+		group.angVel *= 0.999f;
 		group.angle  += group.angVel;
 
 		// Energy transfer at the contact angle (not at vertical/0).
