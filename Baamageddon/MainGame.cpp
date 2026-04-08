@@ -216,9 +216,11 @@ void DrawScene()
 
 	// Draw islands with their impact offset applied as a visual-only vertical dip,
 	// then ease the offset back to zero over time.
+	// Cradle block platforms are intentionally skipped here — they're drawn by the Newton's Cradle loop.
 	for( Platform& p : gameState.vPlatforms )
 	{
 		GameObject& obj = Play::GetGameObject( p.platform_id );
+		if( obj.type != TYPE_ISLAND ) continue;
 		Play::DrawSprite( obj.spriteId, obj.pos + Point2f( 0, p.impactOffset ), obj.frame );
 		p.impactOffset *= 0.85f; // spring back towards 0
 		if( p.impactOffset < 0.1f ) p.impactOffset = 0.f;
@@ -1124,24 +1126,18 @@ void UpdateNewtonsCradle()
 		group.angVel *= 0.999f;
 		group.angle  += group.angVel;
 
-		// Energy transfer at the contact angle (not at vertical/0).
-		// The outer block travels from -(amplitude+contactAngle) to +contactAngle before
-		// it physically reaches the adjacent block; transferring at 0 caused pass-through.
-		//
-		//   Left active (0): fires when angle >= +contactAngle (block just touched adjacent)
-		//   After transfer: right block starts at -contactAngle (symmetric touch position)
-		//   and inherits the angular velocity — so it swings outward immediately.
-		if( group.activeEnd == 0 && group.angle >= group.contactAngle && group.angVel > 0.f )
+		// Energy transfer at the vertical (angle == 0): active block passes through centre,
+		// instantly hands its velocity to the opposite end. Inactive blocks rest at 0
+		// (hanging straight down at their own pivot), so all blocks form a visible row at rest.
+		if( group.activeEnd == 0 && group.angle >= 0.f && group.angVel > 0.f )
 		{
 			group.activeEnd = 1;
-			group.angle     = -group.contactAngle; // right block at symmetric contact position
-			// angVel stays positive: right block swings outward (rightward)
+			group.angle     = 0.f;
 		}
-		else if( group.activeEnd == 1 && group.angle <= -group.contactAngle && group.angVel < 0.f )
+		else if( group.activeEnd == 1 && group.angle <= 0.f && group.angVel < 0.f )
 		{
 			group.activeEnd = 0;
-			group.angle     = group.contactAngle; // left block at symmetric contact position
-			// angVel stays negative: left block swings outward (leftward)
+			group.angle     = 0.f;
 		}
 
 		// Position and draw each block
@@ -1151,14 +1147,12 @@ void UpdateNewtonsCradle()
 			bool isLeftEnd  = ( i == 0 );
 			bool isRightEnd = ( i == (int)group.blockIds.size() - 1 );
 
-			// Active end: uses group.angle.
-			// Inactive end: rests at contactAngle (touching adjacent block) so there's
-			// no visual gap or overlap between the rope tip and the middle block.
+			// Active end uses group.angle; inactive end rests at 0 (hanging straight down).
 			float blockAngle = 0.f;
 			if( isLeftEnd  )
-				blockAngle = ( group.activeEnd == 0 ) ? group.angle :  group.contactAngle;
+				blockAngle = ( group.activeEnd == 0 ) ? group.angle : 0.f;
 			if( isRightEnd )
-				blockAngle = ( group.activeEnd == 1 ) ? group.angle : -group.contactAngle;
+				blockAngle = ( group.activeEnd == 1 ) ? group.angle : 0.f;
 
 			obj.rotation = -blockAngle; // negate for PlayBuffer's clockwise convention
 
